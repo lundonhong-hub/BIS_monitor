@@ -132,37 +132,50 @@ def parse_gazette_rows(page):
 
 
 def collect_from_view_all(page, target):
-    """홈에서 특정 View All(postback)을 클릭해 전체 목록을 긁는다."""
+    """홈에서 특정 View All(postback)을 클릭해 전체 목록을 긁는다. 최대 3회 재시도."""
     rows = []
-    if not goto_retry(page, HOME_URL):
-        print(f"  [경고] 홈 접속 실패")
-        return rows
 
-    # __doPostBack 링크를 정확히 클릭 (href에 target 포함된 a)
-    clicked = False
-    el = page.query_selector(f"a[href*=\"{target}\"]")
-    if el:
+    for attempt in range(3):
+        # 매 시도마다 홈부터 새로 시작 (깨진 상태 초기화)
+        if not goto_retry(page, HOME_URL):
+            print(f"  [경고] 홈 접속 실패 (시도 {attempt+1})")
+            continue
+
+        # View All 클릭: 앵커 클릭 → 실패 시 JS postback
+        el = page.query_selector(f"a[href*=\"{target}\"]")
+        if not el:
+            print(f"  [경고] '{target}' 링크 없음 (시도 {attempt+1})")
+            continue
         try:
-            # 타임아웃 넉넉히 (Extra Ordinary는 데이터가 많아 로딩이 김)
             with page.expect_navigation(wait_until="domcontentloaded", timeout=90000):
-                el.click(timeout=60000)
-            clicked = True
-        except Exception as e1:
-            # 네비게이션이 안 잡히면 JS로 직접 postback 실행 시도
-            print(f"  [클릭 재시도] {target}: {str(e1)[:60]}")
+                el.click(timeout=45000)
+        except Exception:
             try:
                 page.evaluate(f"__doPostBack('{target}','')")
                 page.wait_for_load_state("domcontentloaded", timeout=90000)
-                clicked = True
             except Exception as e2:
-                print(f"  [postback 직접실행 실패] {str(e2)[:60]}")
-    if not clicked:
-        print(f"  [경고] '{target}' View All 진입 실패")
+                print(f"  [postback 실패] {str(e2)[:50]} (시도 {attempt+1})")
+                continue
+
+        # ★핵심★ 목록 데이터(Gazette ID 패턴)가 실제로 나타날 때까지 대기
+        # 빈 페이지로 넘어가 0건 되는 것 방지
+        got_data = False
+        for _ in range(6):  # 최대 ~12초 대기
+            page.wait_for_timeout(2000)
+            body = page.inner_text("body") if page.query_selector("body") else ""
+            if re.search(r"CG-[A-Z]{2}-[A-Z]-\d{8}-\d+", body):
+                got_data = True
+                break
+        if got_data:
+            print(f"  [진단-{target}] 진입성공 (시도 {attempt+1}) URL={page.url}")
+            break
+        else:
+            print(f"  [재시도] {target} 목록 안 뜸 (시도 {attempt+1}/3), 다시 시도")
+    else:
+        print(f"  [경고] '{target}' 3회 시도 후에도 목록 진입 실패")
         return rows
 
-    page.wait_for_timeout(2500)
-    print(f"  [진단-{target}] URL={page.url} 제목={page.title()}")
-
+    page.wait_for_timeout(1500)
     # 결과 파싱 + 페이지네이션
     rows += parse_gazette_rows(page)
 

@@ -63,9 +63,20 @@ def fetch_ministry_month(page, ministry_value, ministry_label, month, year):
     # ── 직접 URL 접근 방식 (클릭 체인 대신) ──
     # 이 사이트는 홈 접속으로 세션을 받은 뒤,
     #   (S(세션))/SearchMinistry.aspx?id=907733 로 직행하면 검색 화면이 열린다.
-    # 1) 홈페이지 접속 → 세션 세그먼트 확보
-    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(1500)
+    # 1) 홈페이지 접속 → 세션 세그먼트 확보 (프로토콜 에러 대비 재시도)
+    home_ok = False
+    for attempt in range(3):
+        try:
+            page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(1500)
+            home_ok = True
+            break
+        except Exception as e:
+            print(f"  [재시도 {attempt+1}/3] 홈 접속 실패: {str(e)[:80]}")
+            page.wait_for_timeout(2000)
+    if not home_ok:
+        print(f"  [경고] 홈페이지 접속 최종 실패")
+        return rows
 
     # 현재 페이지의 링크/URL에서 (S(...)) 세션 세그먼트 추출
     html = page.content()
@@ -80,9 +91,21 @@ def fetch_ministry_month(page, ministry_value, ministry_label, month, year):
         search_url = "https://egazette.gov.in/SearchMinistry.aspx?id=907733"
     print(f"  [진입] 세션={'있음' if session_seg else '없음'} 검색URL 직행")
 
-    # 2) 검색 화면으로 직접 이동
-    page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(1500)
+    # 2) 검색 화면으로 직접 이동 (프로토콜 에러 대비 재시도)
+    last_err = None
+    for attempt in range(3):
+        try:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(1500)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            print(f"  [재시도 {attempt+1}/3] 검색페이지 이동 실패: {str(e)[:80]}")
+            page.wait_for_timeout(2000)
+    if last_err:
+        print(f"  [경고] 검색페이지 이동 최종 실패")
+        return rows
     print(f"  [진단-검색페이지] URL={page.url} 제목={page.title()}")
 
     # ddlMinistry 있어야 정상
@@ -310,7 +333,17 @@ def main():
     browser_cookies = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # 구형 ASP.NET 서버는 HTTP/2를 제대로 처리 못 함 → HTTP/1.1 강제 등 호환 플래그
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-http2",              # HTTP/2 끄기 (ERR_HTTP2_PROTOCOL_ERROR 방지)
+                "--disable-quic",               # QUIC도 끄기
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",

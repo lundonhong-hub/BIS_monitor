@@ -60,87 +60,30 @@ def fetch_ministry_month(page, ministry_value, ministry_label, month, year):
     """브라우저 page로 한 부처의 한 월치 공보를 조회해 행 리스트 반환."""
     rows = []
 
+    # ── 직접 URL 접근 방식 (클릭 체인 대신) ──
+    # 이 사이트는 홈 접속으로 세션을 받은 뒤,
+    #   (S(세션))/SearchMinistry.aspx?id=907733 로 직행하면 검색 화면이 열린다.
+    # 1) 홈페이지 접속 → 세션 세그먼트 확보
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(1500)
 
-    # 상단 Search 메뉴 클릭 → SearchMenu
-    # 홈페이지 Search는 __doPostBack('sgzt','') 방식(자바스크립트).
-    # 클릭 후 실제로 페이지(URL 또는 내용)가 바뀔 때까지 명확히 대기해야 함.
-    clicked_search = False
-    for selector in [
-        "a[href*=\"sgzt\"]",
-        "a:has-text('Search Gazette')",
-        "a:has-text('Search')",
-    ]:
-        try:
-            el = page.query_selector(selector)
-            if not el:
-                continue
-            before_url = page.url
-            # postback 네비게이션을 기다리며 클릭
-            try:
-                with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
-                    el.click()
-            except Exception:
-                # 네비게이션 이벤트가 안 잡히면, 내용 변화를 기다림
-                el.click()
-                page.wait_for_timeout(3000)
-            # SearchMenu 특유의 요소가 나타날 때까지 대기 시도
-            try:
-                page.wait_for_selector(
-                    "a[href*='SearchMinistry'], a:has-text('Ministry'), #ddlMinistry",
-                    timeout=20000)
-            except Exception:
-                pass
-            clicked_search = True
-            print(f"  [진입] Search 클릭: '{selector}' (URL {before_url[-25:]} → {page.url[-30:]})")
-            break
-        except Exception as e:
-            print(f"  [Search시도 실패] {selector}: {e}")
-    if not clicked_search:
-        print(f"  [경고] Search 메뉴 클릭 실패")
+    # 현재 페이지의 링크/URL에서 (S(...)) 세션 세그먼트 추출
+    html = page.content()
+    seg_match = re.search(r"\(S\([a-z0-9]+\)\)", page.url)
+    if not seg_match:
+        seg_match = re.search(r"\(S\([a-z0-9]+\)\)", html)
+    session_seg = seg_match.group(0) if seg_match else ""
 
-    # ── 진단: SearchMenu 도달 후 클릭 가능한 링크/버튼 전부 나열 ──
-    page.wait_for_timeout(2000)  # 페이지 안정화 대기 (컨텍스트 파괴 방지)
-    try:
-        print(f"  [진단-SearchMenu] URL={page.url} 제목={page.title()}")
-        # 이미 SearchMinistry 화면(ddlMinistry 존재)이면 진단 생략하고 바로 진행
-        if page.query_selector("#ddlMinistry") is None:
-            clickables = page.query_selector_all("a")
-            print(f"  [진단-링크 {len(clickables)}개]")
-            for i, el in enumerate(clickables[:50]):
-                try:
-                    txt = (el.inner_text() or "").strip()
-                    href = el.get_attribute("href") or ""
-                    if txt or "aspx" in href.lower() or "doPostBack" in href:
-                        print(f"    [{i}] text='{txt[:35]}' href='{href[:55]}'")
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"  [진단-SearchMenu 읽기 실패] {e}")
-    # ─────────────────────────────────────────────────────────
+    if session_seg:
+        search_url = f"https://egazette.gov.in/{session_seg}/SearchMinistry.aspx?id=907733"
+    else:
+        search_url = "https://egazette.gov.in/SearchMinistry.aspx?id=907733"
+    print(f"  [진입] 세션={'있음' if session_seg else '없음'} 검색URL 직행")
 
-    # SearchMenu에서 Ministry 검색 진입 (정확한 링크는 위 진단 로그로 확정)
-    # 우선 'Ministry Wise' / 'Search by Ministry' 류를 우선 시도, 없으면 SearchMinistry href 링크
-    entered = False
-    for selector in [
-        "a:has-text('Ministry Wise')",
-        "a:has-text('Search by Ministry')",
-        "a:has-text('Ministry wise')",
-        "a[href*='SearchMinistry']",
-        "input[alt*='Ministry']",
-    ]:
-        try:
-            el = page.query_selector(selector)
-            if el:
-                el.click()
-                page.wait_for_load_state("domcontentloaded", timeout=30000)
-                entered = True
-                print(f"  [진입] '{selector}' 로 Ministry 검색 진입 성공")
-                break
-        except Exception as e:
-            print(f"  [진입시도 실패] {selector}: {e}")
-    if not entered:
-        print(f"  [경고] Ministry 검색 진입점을 못 찾음 — 위 클릭가능요소 목록 참고 필요")
+    # 2) 검색 화면으로 직접 이동
+    page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(1500)
+    print(f"  [진단-검색페이지] URL={page.url} 제목={page.title()}")
 
     # ddlMinistry 있어야 정상
     if page.query_selector("#ddlMinistry") is None:
@@ -373,15 +316,20 @@ def main():
                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
             viewport={"width": 1400, "height": 900},
         )
-        page = context.new_page()
 
         for mvalue, mlabel in MINISTRIES.items():
             for month, year in months:
+                page = context.new_page()  # 조회마다 새 탭 (이전 실패 전염 방지)
                 try:
                     batch = fetch_ministry_month(page, mvalue, mlabel, month, year)
                 except Exception as e:
                     print(f"[에러] {mlabel} {year}-{month:02d} 조회 실패: {e}")
                     batch = []
+                finally:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
                 for row in batch:
                     if row["gazette_id"] not in seen_ids:
                         seen_ids.add(row["gazette_id"])

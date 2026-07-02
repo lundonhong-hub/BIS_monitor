@@ -140,22 +140,27 @@ def collect_from_view_all(page, target):
 
     # __doPostBack 링크를 정확히 클릭 (href에 target 포함된 a)
     clicked = False
-    for sel in [f"a[href*=\"{target}\"]"]:
-        el = page.query_selector(sel)
-        if el:
-            try:
-                with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
-                    el.click()
-            except Exception:
-                el.click()
-                page.wait_for_timeout(3000)
+    el = page.query_selector(f"a[href*=\"{target}\"]")
+    if el:
+        try:
+            # 타임아웃 넉넉히 (Extra Ordinary는 데이터가 많아 로딩이 김)
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=90000):
+                el.click(timeout=60000)
             clicked = True
-            break
+        except Exception as e1:
+            # 네비게이션이 안 잡히면 JS로 직접 postback 실행 시도
+            print(f"  [클릭 재시도] {target}: {str(e1)[:60]}")
+            try:
+                page.evaluate(f"__doPostBack('{target}','')")
+                page.wait_for_load_state("domcontentloaded", timeout=90000)
+                clicked = True
+            except Exception as e2:
+                print(f"  [postback 직접실행 실패] {str(e2)[:60]}")
     if not clicked:
-        print(f"  [경고] '{target}' View All 링크 못 찾음")
+        print(f"  [경고] '{target}' View All 진입 실패")
         return rows
 
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(2500)
     print(f"  [진단-{target}] URL={page.url} 제목={page.title()}")
 
     # 결과 파싱 + 페이지네이션
@@ -170,9 +175,9 @@ def collect_from_view_all(page, target):
         if not target_link:
             break
         try:
-            target_link.click()
-            page.wait_for_load_state("domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1000)
+            target_link.click(timeout=60000)
+            page.wait_for_load_state("domcontentloaded", timeout=60000)
+            page.wait_for_timeout(1500)
             rows += parse_gazette_rows(page)
             page_num += 1
             if page_num > 30:
